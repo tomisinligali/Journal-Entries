@@ -1,0 +1,106 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id                  String    @id @default(cuid())
+  email               String    @unique
+  passwordHash        String?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+  deletionRequestedAt DateTime?
+  deletionDeadline    DateTime?
+
+  entries Entry[]
+  tags    Tag[]
+}
+
+model Entry {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title     String
+  content   String
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  tags   EntryTag[]
+  images Image[]
+
+  @@index([userId, createdAt])
+}
+
+model Tag {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  entries EntryTag[]
+
+  @@unique([userId, name])
+  @@index([userId])
+}
+
+model EntryTag {
+  entryId String
+  tagId   String
+  entry   Entry  @relation(fields: [entryId], references: [id], onDelete: Cascade)
+  tag     Tag    @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([entryId, tagId])
+}
+
+model Image {
+  id         String   @id @default(cuid())
+  entryId    String
+  entry      Entry    @relation(fields: [entryId], references: [id], onDelete: Cascade)
+  storageRef String
+  mimeType   String
+  sizeBytes  Int
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+}
+
+enum JobStatus {
+  pending
+  processing
+  succeeded
+  failed
+  dead
+}
+
+model Job {
+  id             String     @id @default(cuid())
+  type           String
+  payload        Json
+  status         JobStatus  @default(pending)
+  attempts       Int        @default(0)
+  maxAttempts    Int        @default(3)
+  lastError      String?
+  runAt          DateTime   @default(now())
+  startedAt      DateTime?
+  finishedAt     DateTime?
+  idempotencyKey String     @unique
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+
+  output JobOutput?
+
+  @@index([status, runAt])
+}
+
+model JobOutput {
+  jobId     String   @id
+  job       Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  output    Json
+  createdAt DateTime @default(now())
+}
