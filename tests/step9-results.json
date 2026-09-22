@@ -1,0 +1,111 @@
+{
+  "attack1.concurrencyCap": {
+    "cap": 5,
+    "maxObservedProcessing": 5,
+    "pass": true,
+    "jobsEnqueued": 50,
+    "jobsSucceeded": 50
+  },
+  "attack2.failToDead": {
+    "pass": true,
+    "trace": [
+      {
+        "tMs": 1,
+        "status": "pending",
+        "attempts": 0,
+        "scheduledRunAt": "2026-09-22T13:48:12.314Z",
+        "lastError": null
+      },
+      {
+        "tMs": 152,
+        "status": "processing",
+        "attempts": 0,
+        "scheduledRunAt": "2026-09-22T13:48:12.314Z",
+        "lastError": null
+      },
+      {
+        "tMs": 304,
+        "status": "pending",
+        "attempts": 1,
+        "scheduledRunAt": "2026-09-22T13:48:13.608Z",
+        "lastError": "Provider down: 100% failure"
+      },
+      {
+        "tMs": 1531,
+        "status": "pending",
+        "attempts": 2,
+        "scheduledRunAt": "2026-09-22T13:48:16.057Z",
+        "lastError": "Provider down: 100% failure"
+      },
+      {
+        "tMs": 3831,
+        "status": "pending",
+        "attempts": 3,
+        "scheduledRunAt": "2026-09-22T13:48:20.451Z",
+        "lastError": "Provider down: 100% failure"
+      },
+      {
+        "tMs": 8280,
+        "status": "dead",
+        "attempts": 4,
+        "scheduledRunAt": "2026-09-22T13:48:20.451Z",
+        "lastError": "Provider down: 100% failure"
+      }
+    ],
+    "backoffGaps": [
+      1294,
+      2449,
+      4394
+    ],
+    "exponentialGrowthVerified": true
+  },
+  "attack3.killMidJob": {
+    "pass": true,
+    "claimedIntoProcessing": true,
+    "stateAtKillStatus": "processing",
+    "stateAtKillStartedAt": "2026-09-22T13:48:20.802Z",
+    "postKillTrace": [
+      {
+        "tMs": 1,
+        "status": "processing",
+        "attempts": 0,
+        "sig": "[\"processing\",0]"
+      },
+      {
+        "tMs": 5229,
+        "status": "processing",
+        "attempts": 1,
+        "sig": "[\"processing\",1]"
+      },
+      {
+        "tMs": 10298,
+        "status": "processing",
+        "attempts": 2,
+        "sig": "[\"processing\",2]"
+      },
+      {
+        "tMs": 11222,
+        "status": "succeeded",
+        "attempts": 2,
+        "sig": "[\"succeeded\",2]"
+      }
+    ],
+    "sawRecoveryAttempt1": false,
+    "finalStatus": "succeeded",
+    "finalAttempts": 2
+  },
+  "attack4.idempotency": {
+    "pass": true,
+    "firstJobId": "cmucqc6ga001ge93oht8dfl19",
+    "secondJobId": "cmucqc6ga001ge93oht8dfl19",
+    "secondIsDuplicate": true,
+    "dbRowsForKey": 1
+  },
+  "attack5.twoWorkers": {
+    "pass": true,
+    "jobs": 10,
+    "succeeded": 10,
+    "outputsStored": 10,
+    "anyJobProcessedTwice": false
+  }
+}

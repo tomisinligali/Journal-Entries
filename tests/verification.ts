@@ -212,18 +212,19 @@ async function runVerificationSuite() {
   }
   const finalRecoveredJob = await prisma.job.findUnique({ where: { id: stuckJobRes.job.id } });
 
-  const test4Pass = recoveredCount === 1 && recoveredJob?.status === "pending" && finalRecoveredJob?.status === "succeeded";
+  const test4Pass = recoveredCount === 1 && recoveredJob?.status === "pending" && recoveredJob?.attempts === 1 && finalRecoveredJob?.status === "succeeded";
   results["4. Stuck Job Recovery"] = {
     pass: test4Pass,
     evidence: {
       claimedState: claimedStuck?.status,
       recoveredCount,
       stateAfterRecovery: recoveredJob?.status,
+      attemptsAfterRecovery: recoveredJob?.attempts,
       recoveryMessage: recoveredJob?.lastError,
       finalStateAfterWorkerResume: finalRecoveredJob?.status,
     },
   };
-  console.log(`[Test 4] Result: ${test4Pass ? "PASS" : "FAIL"} - Recovered: ${recoveredCount}, State After Recovery: ${recoveredJob?.status}, Final State: ${finalRecoveredJob?.status}\n`);
+  console.log(`[Test 4] Result: ${test4Pass ? "PASS" : "FAIL"} - Recovered: ${recoveredCount}, State After Recovery: ${recoveredJob?.status}, Attempts: ${recoveredJob?.attempts}, Final State: ${finalRecoveredJob?.status}\n`);
 
   // -----------------------------------------------------------------
   // Test 5: Same idempotency key submitted twice - confirm exactly 1 job exists
@@ -307,6 +308,112 @@ async function runVerificationSuite() {
     },
   };
   console.log(`[Test 6] Result: ${test6Pass ? "PASS" : "FAIL"} - Total Succeeded: ${totalSucceeded6}/20, Outputs Stored: ${totalOutputs6}/20\n`);
+
+  // -----------------------------------------------------------------
+  // Test 7: Crash after work but before marking succeeded - output keyed by jobId prevents re-run
+  // -----------------------------------------------------------------
+  console.log(">>> [Test 7] Idempotent Work: Crash After Work, Before Marking Succeeded");
+  await prisma.jobOutput.deleteMany({});
+  await prisma.job.deleteMany({});
+
+  const job7 = await enqueueJob({
+    type: "TEST_JOB",
+    payload: { message: "idempotent work" },
+    idempotencyKey: `test7-${Date.now()}`,
+  });
+
+  // Run 1: claim + process to success (work happens, output stored with jobId as key)
+  const claimed7a = await claimNextJob();
+  if (!claimed7a) throw new Error("Test 7: could not claim job");
+  await processClaimedJob(claimed7a);
+
+  const outputAfterFirstRun = await prisma.jobOutput.findUnique({ where: { jobId: job7.job.id } });
+  const firstOutputCreatedAt = outputAfterFirstRun?.createdAt;
+  const firstExecutedAt = (outputAfterFirstRun?.output as any)?.executedAt;
+
+  // Simulate crash between "work done" and "job marked succeeded":
+  // force the job back to a stuck 'processing' state and recover it.
+  await prisma.job.update({
+    where: { id: job7.job.id },
+    data: { status: "processing", startedAt: new Date(Date.now() - 10000) },
+  });
+  await recoverStuckJobs(5000);
+
+  // Run 2: worker picks it up again - must NOT re-run the work
+  const claimed7b = await claimNextJob();
+  if (!claimed7b) throw new Error("Test 7: could not reclaim job");
+  await processClaimedJob(claimed7b);
+
+  const outputAfterSecondRun = await prisma.jobOutput.findUnique({ where: { jobId: job7.job.id } });
+  const secondExecutedAt = (outputAfterSecondRun?.output as any)?.executedAt;
+  const finalJob7 = await prisma.job.findUnique({ where: { id: job7.job.id } });
+
+  const test7Pass =
+    firstExecutedAt === secondExecutedAt &&
+    outputAfterSecondRun?.createdAt.getTime() === firstOutputCreatedAt?.getTime() &&
+    finalJob7?.status === "succeeded";
+  results["7. Idempotent Work (skip re-run)"] = {
+    pass: test7Pass,
+    evidence: {
+      firstRunExecutedAt: firstExecutedAt,
+      secondRunExecutedAt: secondExecutedAt,
+      workReRan: firstExecutedAt !== secondExecutedAt,
+      outputRowCount: await prisma.jobOutput.count({ where: { jobId: job7.job.id } }),
+      finalStatus: finalJob7?.status,
+      attempts: finalJob7?.attempts,
+    },
+  };
+  console.log(`[Test 7] Result: ${test7Pass ? "PASS" : "FAIL"} - Work Re-Ran: ${firstExecutedAt !== secondExecutedAt}, Final Status: ${finalJob7?.status}\n`);
+
+  // -----------------------------------------------------------------
+  // Test 8: Sweep increments attempts; reaching max during recovery -> dead
+  // -----------------------------------------------------------------
+  console.log(">>> [Test 8] Sweep Counts Attempts & Dead-Letters at Max");
+  await prisma.jobOutput.deleteMany({});
+  await prisma.job.deleteMany({});
+
+  const job8 = await enqueueJob({
+    type: "TEST_JOB",
+    payload: { delayMs: 5 },
+    idempotencyKey: `test8-${Date.now()}`,
+    maxAttempts: 2,
+  });
+
+  // Sweep 1: stuck at attempt 0 -> attempts 1, reset to pending
+  const claimed8a = await claimNextJob();
+  if (!claimed8a) throw new Error("Test 8: could not claim");
+  await prisma.job.update({
+    where: { id: job8.job.id },
+    data: { startedAt: new Date(Date.now() - 10000) },
+  });
+  const recovered8a = await recoverStuckJobs(5000);
+  const afterSweep1 = await prisma.job.findUnique({ where: { id: job8.job.id } });
+
+  // Sweep 2: stuck again at attempt 1 -> attempts 2 = maxAttempts -> dead
+  const claimed8b = await claimNextJob();
+  if (!claimed8b) throw new Error("Test 8: could not reclaim");
+  await prisma.job.update({
+    where: { id: job8.job.id },
+    data: { startedAt: new Date(Date.now() - 10000) },
+  });
+  const recovered8b = await recoverStuckJobs(5000);
+  const afterSweep2 = await prisma.job.findUnique({ where: { id: job8.job.id } });
+
+  const test8Pass =
+    afterSweep1?.status === "pending" && afterSweep1?.attempts === 1 &&
+    afterSweep2?.status === "dead" && afterSweep2?.attempts === 2 &&
+    recovered8a === 1 && recovered8b === 1;
+  results["8. Sweep Attempt Counting & Dead"] = {
+    pass: test8Pass,
+    evidence: {
+      afterSweep1Status: afterSweep1?.status,
+      afterSweep1Attempts: afterSweep1?.attempts,
+      afterSweep2Status: afterSweep2?.status,
+      afterSweep2Attempts: afterSweep2?.attempts,
+      maxAttempts: afterSweep2?.maxAttempts,
+    },
+  };
+  console.log(`[Test 8] Result: ${test8Pass ? "PASS" : "FAIL"} - After Sweep1: ${afterSweep1?.status}/${afterSweep1?.attempts}, After Sweep2: ${afterSweep2?.status}/${afterSweep2?.attempts}\n`);
 
   console.log("=================================================");
   console.log("                FINAL VERDICT                    ");
