@@ -145,3 +145,7 @@ Screenshots for the write-up live in `docs/`:
 - `screenshot-1-jobs-table.png` — jobs table with every status
 - `screenshot-2-dead-letter.png` — dead letter view
 - `screenshot-3-stuck-recovery-before.png` / `...-after.png` — the kill-and-recover story
+
+## Task 2 Review Notes
+
+This project implements a database-backed background job system with retries, exponential backoff, idempotency, stuck-job recovery, and dead-letter handling.
