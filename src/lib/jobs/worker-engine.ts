@@ -42,57 +42,78 @@ export async function claimNextJob(): Promise<Job | null> {
 }
 
 /**
- * Recovers jobs that have been stuck in 'processing' status longer than the processing timeout.
+ * Sweeps jobs stuck in 'processing' longer than the timeout (Step 6).
+ * Each stuck job gets an incremented attempt count: if attempts remain it is
+ * reset to 'pending' (ready to run again); if this brings it to maxAttempts it
+ * becomes 'dead'.
  */
 export async function recoverStuckJobs(timeoutMs: number): Promise<number> {
-  const cutoff = new Date(Date.now() - timeoutMs);
+  // Use the database clock (NOW()) for the cutoff so the sweep stays correct
+  // regardless of the connection's timezone vs. the UTC timestamps Prisma writes.
+  const stuckCandidates = await prisma.$queryRaw<Job[]>`
+    SELECT * FROM "Job"
+    WHERE status = 'processing'
+      AND "startedAt" < NOW() - make_interval(secs => ${timeoutMs / 1000})
+  `;
 
-  // 1. Recover jobs that still have attempts remaining -> set back to 'pending' (will retry)
-  const retryResult = await prisma.job.updateMany({
-    where: {
-      status: "processing",
-      startedAt: { lt: cutoff },
-      attempts: { lt: prisma.job.fields.maxAttempts },
-    },
-    data: {
-      status: "pending",
-      startedAt: null,
-      lastError: `Recovered from stuck processing state (timeout ${timeoutMs}ms)`,
-      runAt: new Date(),
-    },
-  });
+  let recoveredCount = 0;
+  for (const candidate of stuckCandidates) {
+    const newAttempts = candidate.attempts + 1;
 
-  // 2. Mark stuck jobs that reached maxAttempts -> set to 'dead'
-  // Fetch candidate jobs first to handle field comparison reliably across SQL DBs
-  const deadCandidates = await prisma.job.findMany({
-    where: {
-      status: "processing",
-      startedAt: { lt: cutoff },
-    },
-  });
-
-  let deadCount = 0;
-  for (const candidate of deadCandidates) {
-    if (candidate.attempts >= candidate.maxAttempts) {
+    if (newAttempts >= candidate.maxAttempts) {
       await prisma.job.update({
         where: { id: candidate.id },
         data: {
           status: "dead",
+          attempts: newAttempts,
           finishedAt: new Date(),
           lastError: `Stuck job reached max attempts (${candidate.maxAttempts}) during recovery`,
+          updatedAt: new Date(),
         },
       });
-      deadCount++;
+    } else {
+      await prisma.job.update({
+        where: { id: candidate.id },
+        data: {
+          status: "pending",
+          attempts: newAttempts,
+          startedAt: null,
+          lastError: `Recovered from stuck processing state (timeout ${timeoutMs}ms)`,
+          runAt: new Date(),
+          updatedAt: new Date(),
+        },
+      });
     }
+
+    recoveredCount++;
   }
 
-  return retryResult.count + deadCount;
+  return recoveredCount;
 }
 
 /**
  * Executes a claimed job and handles success, failure, backoff, and idempotent output storage.
  */
 export async function processClaimedJob(job: Job, config: WorkerConfig = defaultConfig): Promise<void> {
+  // Idempotency guard (Step 5): the work may have already completed in a prior run —
+  // e.g. the worker crashed after doing the work but before marking the job succeeded.
+  // If output already exists for this jobId, skip the work entirely and just mark succeeded.
+  const existingOutput = await prisma.jobOutput.findUnique({
+    where: { jobId: job.id },
+  });
+
+  if (existingOutput) {
+    await prisma.job.update({
+      where: { id: job.id },
+      data: {
+        status: "succeeded",
+        finishedAt: new Date(),
+        updatedAt: new Date(),
+      },
+    });
+    return;
+  }
+
   const handler = getJobHandler(job.type);
 
   try {

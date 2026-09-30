@@ -268,15 +268,21 @@ export default function JobsDashboard() {
             ) : (
               <div className="table-responsive">
                 <table className="table">
-                  <thead>
-                    <tr>
-                      <th>Job ID</th>
-                      <th>Type</th>
-                      <th>Status</th>
-                      <th>Attempts</th>
-                      <th>Actions</th>
-                    </tr>
-                  </thead>
+<thead>
+                      <tr>
+                        <th>Job ID</th>
+                        <th>Type</th>
+                        <th>Status</th>
+                        <th>Attempts</th>
+                        {activeTab === "dead" && (
+                          <>
+                            <th>Payload</th>
+                            <th>Last Error</th>
+                          </>
+                        )}
+                        <th>Actions</th>
+                      </tr>
+                    </thead>
                   <tbody>
                     {jobs.map((job) => (
                       <tr key={job.id}>
@@ -292,6 +298,20 @@ export default function JobsDashboard() {
                         <td>
                           {job.attempts} / {job.maxAttempts}
                         </td>
+                        {activeTab === "dead" && (
+                          <>
+                            <td>
+                              <pre className="dead-pre">{JSON.stringify(job.payload, null, 2)}</pre>
+                            </td>
+                            <td>
+                              {job.lastError ? (
+                                <pre className="dead-pre">{job.lastError}</pre>
+                              ) : (
+                                <span className="muted">—</span>
+                              )}
+                            </td>
+                          </>
+                        )}
                         <td>
                           <div style={{ display: "flex", gap: "0.5rem" }}>
                             <button
@@ -538,6 +558,20 @@ export default function JobsDashboard() {
           background: rgba(239, 68, 68, 0.15);
           border: 1px solid var(--color-danger);
           color: #f87171;
+        }
+        .dead-pre {
+          background: var(--color-bg);
+          border: 1px solid var(--color-border);
+          border-radius: 4px;
+          padding: 0.35rem 0.5rem;
+          margin: 0;
+          max-width: 220px;
+          max-height: 90px;
+          overflow: auto;
+          font-size: 0.75rem;
+          font-family: monospace;
+          white-space: pre-wrap;
+          word-break: break-word;
         }
         .muted {
           color: var(--color-text-muted);
